@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      ENABLED_ARCHS: aarch64,hexagon
+      ENABLED_ARCHS: aarch64,hexagon,riscv
       CCACHE_DIR: $GITHUB_WORKSPACE/ccache/
       CCACHE_BASEDIR: $GITHUB_WORKSPACE/
       PICOLIBC_CONFIG_DEFAULT: ""
