@@ -58,6 +58,15 @@ jobs:
       - name: Checkout LLVM Project
         run: |
           git clone --branch main --single-branch --depth 1 https://github.com/llvm/llvm-project $GITHUB_WORKSPACE/llvm-project
+          # test temporary fix
+          if [ ${{ matrix.arch.name }} = "x86_64" ]; then
+            cd ${{ github.workspace }}/llvm-project
+            git config user.name "CI Bot"
+            git config user.email "ci@example.com"
+            git remote add quic-k https://github.com/quic-k/llvm-project.git
+            git fetch quic-k x86_assert
+            git cherry-pick 7913620ab6564aef98473bb0cf49959af35d98d9
+          fi
 
       - name: Checkout ELD
         uses: actions/checkout@v4
@@ -112,7 +121,7 @@ jobs:
               -DCOMPILER_RT_BUILD_PROFILE=OFF \
               -DCMAKE_C_COMPILER_TARGET=${{ matrix.arch.triple }} \
               -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON \
-              -DCMAKE_C_FLAGS="--target=${{ matrix.arch.triple }} -ffreestanding -nostdlibinc" \
+              -DCMAKE_C_FLAGS="--target=${{ matrix.arch.triple }} -std=c17 -ffreestanding -nostdlibinc" \
               -DCMAKE_CXX_FLAGS="--target=${{ matrix.arch.triple }} -ffreestanding -nostdlibinc" \
               -DCMAKE_C_COMPILER_FORCED=ON \
               -DCMAKE_CXX_COMPILER_FORCED=ON \
