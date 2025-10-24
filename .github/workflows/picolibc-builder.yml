@@ -58,6 +58,16 @@ jobs:
       - name: Checkout LLVM Project
         run: |
           git clone --branch main --single-branch --depth 1 https://github.com/llvm/llvm-project $GITHUB_WORKSPACE/llvm-project
+          # test temporary fix
+          if [ ${{ matrix.arch.name }} = "x86_64" ]; then
+            cd ${{ github.workspace }}/llvm-project
+            git config user.name "CI Bot"
+            git config user.email "ci@example.com"
+            git remote add quic-k https://github.com/quic-k/llvm-project.git
+            git fetch quic-k x86_assert
+            COMMIT_HASH=$(git rev-parse quic-k/x86_assert)
+            git cherry-pick $COMMIT_HASH
+          fi
 
       - name: Checkout ELD
         uses: actions/checkout@v4
