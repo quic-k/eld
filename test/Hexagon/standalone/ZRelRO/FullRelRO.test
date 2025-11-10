@@ -5,8 +5,8 @@
 # tests the functionality of a full RELRO segment that includes all the sections
 # that are part of the RELRO segment.
 #END_COMMENT
-RUN: %clang %clangopts -c %p/Inputs/1.c -fPIC -o %t1.1.o -fno-use-init-array
+RUN: %clang %clangopts -c %p/Inputs/1.c -fPIC -o %t1.1.o
 RUN: %link %linkopts %t1.1.o -shared -o %t1.so -z relro -z now
 RUN: %readelf -l -W %t1.so | %filecheck %s
 
-#CHECK: 03 .ctors .dtors .dynamic .got
+#CHECK: 03 .init_array .fini_array .dynamic .got
