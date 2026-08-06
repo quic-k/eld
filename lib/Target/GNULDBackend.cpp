@@ -99,6 +99,7 @@
 #include <chrono>
 #include <climits>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -812,7 +813,10 @@ bool GNULDBackend::canSkipSymbolFromExport(ResolveInfo *R, bool isEntry) const {
     return false;
   // For PIE, only symbols that really need to be exported are the only ones
   // that can be exported. Dynamic List will control this as well.
-  if (config().options().isPIE() && !isEntry)
+  // --export-dynamic is an explicit request to export all globals, so it
+  // overrides this default restriction.
+  if (config().options().isPIE() && !isEntry &&
+      !config().options().exportDynamic())
     return true;
   if (R->isAbsolute())
     return true;
@@ -1739,29 +1743,6 @@ void GNULDBackend::tracePLTCreation(const ResolveInfo *R) const {
     config().raise(Diag::create_plt_entry) << R->name();
 }
 
-// Patching sections.
-ELFSection *GNULDBackend::getGOTPatch() const {
-  return m_DynamicSectionHeadersInputFile->getGOTPatch();
-}
-
-ELFSection *GNULDBackend::getRelaPatch() const {
-  return m_DynamicSectionHeadersInputFile->getRelaPatch();
-}
-
-// Record an absolute PLT entry, which is used in the patch image for symbol
-// resolution to PLTs located in the base image.
-void GNULDBackend::recordAbsolutePLT(ResolveInfo *I, const ResolveInfo *P) {
-  m_AbsolutePLTMap[I] = P;
-}
-
-// Find an entry in the PLT
-const ResolveInfo *GNULDBackend::findAbsolutePLT(ResolveInfo *I) const {
-  auto Entry = m_AbsolutePLTMap.find(I);
-  if (Entry == m_AbsolutePLTMap.end())
-    return nullptr;
-  return Entry->second;
-}
-
 /// getSymbolShndx - this function is called after layout()
 std::pair<uint16_t, uint32_t>
 GNULDBackend::getSymbolShndx(LDSymbol *pSymbol) const {
@@ -2596,10 +2577,21 @@ bool GNULDBackend::setupProgramHdrs() {
         elfSegmentTable().getSegments(llvm::ELF::PT_TLS);
     if (!tls_segs.size())
       return true;
-    uint64_t memsz = 0;
-    for (auto &seg : tls_segs)
-      memsz += seg->memsz();
-    setTLSTemplateSize(memsz);
+    // The TLS template size is the memory span covered by all PT_TLS
+    // segments, i.e. from the lowest segment vaddr to the highest
+    // (vaddr + memsz). This must include any alignment padding *between*
+    // segments (e.g. between .tdata and an over-aligned .tbss placed in a
+    // separate PT_TLS segment). Simply summing each segment's memsz would
+    // drop that inter-segment padding and produce a TLS template size that
+    // disagrees with the runtime thread-pointer setup, corrupting every
+    // TP-relative (TPREL) relocation.
+    uint64_t lo = std::numeric_limits<uint64_t>::max();
+    uint64_t hi = 0;
+    for (auto &seg : tls_segs) {
+      lo = std::min(lo, seg->vaddr());
+      hi = std::max(hi, seg->vaddr() + seg->memsz());
+    }
+    setTLSTemplateSize(hi - lo);
   }
   return true;
 }
@@ -4231,6 +4223,10 @@ bool GNULDBackend::relax() {
   // Print memory regions
   printMemoryRegionsUsage();
 
+  // Warn about RWX segments after the final layout is known.
+  if (LinkerConfig::Object != config().codeGenType())
+    warnRWXSegments();
+
   // Verify memory regions
   verifyMemoryRegions();
 
@@ -4848,7 +4844,6 @@ LDSymbol *GNULDBackend::canProvideSymbol(llvm::StringRef symName) {
   auto P = ProvideMap.find(symName.str());
   auto PSymDef = m_SymDefProvideMap.find(symName);
   bool isPSymDef = PSymDef != m_SymDefProvideMap.end();
-  bool Patchable = false;
   if (P != ProvideMap.end()) {
     if (P->second->isProvideHidden())
       V = ResolveInfo::Hidden;
@@ -4864,7 +4859,6 @@ LDSymbol *GNULDBackend::canProvideSymbol(llvm::StringRef symName) {
     resolverType = std::get<0>(PSymDef->second);
     symVal = std::get<1>(PSymDef->second);
     file = std::get<2>(PSymDef->second);
-    Patchable = std::get<3>(PSymDef->second);
   } else
     return nullptr;
 
@@ -4875,7 +4869,7 @@ LDSymbol *GNULDBackend::canProvideSymbol(llvm::StringRef symName) {
           0x0,                 // size
           symVal,              // value
           FragmentRef::null(), // FragRef
-          V, /* isPostLTOPhase */ false, /* isBitCode */ false, Patchable);
+          V, /* isPostLTOPhase */ false, /* isBitCode */ false);
   if (provided_sym != nullptr) {
     provided_sym->setShouldIgnore(false);
     provided_sym->setScriptDefined();
@@ -5557,3 +5551,18 @@ void GNULDBackend::assignOutputVersionIDs() {
   }
 }
 #endif
+
+void GNULDBackend::warnRWXSegments() {
+  if (!config().options().warnRWXSegments())
+    return;
+  for (auto *Seg : elfSegmentTable()) {
+    if (!Seg->isLoadSegment())
+      continue;
+    uint32_t f = Seg->flag();
+    if ((f & llvm::ELF::PF_W) && (f & llvm::ELF::PF_X)) {
+      config().raise(Diag::warn_rwx_segment)
+          << config().options().outputFileName();
+      return;
+    }
+  }
+}

@@ -10,9 +10,11 @@ on:
       - '.github/workflows/docs.yaml'
       - '.github/workflows/docs-multiversion.yaml'
       - '.github/workflows/ci-win.yml'
-      - '.github/workflows/clang-cross-download.yml'
       - '.github/workflows/clang-cross-schedule.yml'
-      - '.github/workflows/busybox-eld.yml'
+      - '.github/workflows/DownloadClangCrossToolchain/action.yaml'
+      - '.github/workflows/DownloadLatestBusybox/action.yaml'
+      - '.github/workflows/busybox.yml'
+      - '.github/workflows/linux-kernel.yml'
       - '.github/workflows/nightly-musl-builder.yml'
       - '.github/workflows/picolibc-builder.yml'
       - '.github/workflows/nightly-test.yml'
@@ -24,8 +26,7 @@ on:
       - 'etc/**/*.sh'
       - '**/configure_external_llvm.sh'
 
-permissions:
-  contents: write
+permissions: {}
 jobs:
   build:
     # Skip label-triggered runs unless the label is `zephyr-check`.
@@ -39,6 +40,7 @@ jobs:
     permissions:
       contents: write
       statuses: write
+      actions: write      # needed to dispatch zephyr-pr.yml for labeled PRs
 
     env:
       PR_NUMBER: ${{ github.event.number }}
@@ -72,8 +74,8 @@ jobs:
         id: file-check
         working-directory: pr-${{ env.PR_NUMBER }}/llvm-project/llvm/tools/eld
         run: |
-          git fetch origin ${{ env.BASE_BRANCH_NAME }}
-          MERGE_BASE=$(git merge-base origin/${{ env.BASE_BRANCH_NAME }} HEAD)
+          git fetch origin "${BASE_BRANCH_NAME}"
+          MERGE_BASE=$(git merge-base "origin/${BASE_BRANCH_NAME}" HEAD)
           CHANGED_FILES=$(git diff --name-only "$MERGE_BASE" HEAD)
           echo "Changed files: $CHANGED_FILES"
           for file in $CHANGED_FILES; do
@@ -204,7 +206,26 @@ jobs:
           retention-days: 1
           path: pr-${{ env.PR_NUMBER }}/install-pr-toolset.tar.xz
 
+      - name: Trigger Zephyr PR workflow
+        if: |
+          steps.file-check.outputs.skip_build == 'false' &&
+          contains(github.event.pull_request.labels.*.name, 'zephyr-check')
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 #v9.0.0
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            // Dispatch the default-branch copy of zephyr-pr.yml. The artifact
+            // uploaded above is what its resolve job gates on, so by the time
+            // it runs the pr-eld-toolset is present on this CI run.
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'zephyr-pr.yml',
+              ref: context.payload.pull_request.base.ref,
+              inputs: { pr_number: String(context.payload.pull_request.number) },
+            });
+
       - name: Clean up
         if: always()
         run: |
-          rm -rf "pr-${{ env.PR_NUMBER }}"
+          rm -rf "pr-${PR_NUMBER}"
